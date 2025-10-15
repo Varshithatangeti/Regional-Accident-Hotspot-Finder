@@ -4,18 +4,18 @@ import numpy as np
 import folium
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
+from folium.plugins import HeatMap
 import os
-import time
 
 # -------------------------------
-# 🎨 PAGE CONFIG
+# Page Setup
 # -------------------------------
 st.set_page_config(page_title="Regional Accident Hotspot Finder", layout="wide")
 st.title("🚦 Regional Accident Hotspot Finder in India 🇮🇳")
-st.markdown("Enter any region name and see accident hotspots and road conditions nearby.")
+st.markdown("Enter a region name and view all accident hotspots within a 50 km radius.")
 
 # -------------------------------
-# 📂 LOAD DATA
+# Load Data
 # -------------------------------
 accident_csv = "accident_prediction_india.csv"
 coords_csv = "city_coordinates.csv"
@@ -23,12 +23,18 @@ coords_csv = "city_coordinates.csv"
 if os.path.exists(accident_csv):
     df = pd.read_csv(accident_csv)
 else:
-    uploaded_file = st.file_uploader("📤 Upload your CSV file", type=["csv"])
+    uploaded_file = st.file_uploader("📤 Upload your accident CSV file", type=["csv"])
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
     else:
-        st.warning("⚠️ Please provide accident CSV.")
+        st.warning("⚠️ Please upload accident_prediction_india.csv to continue.")
         st.stop()
+
+if os.path.exists(coords_csv):
+    coords_df = pd.read_csv(coords_csv)
+else:
+    st.error("⚠️ city_coordinates.csv not found.")
+    st.stop()
 
 # Fill missing values
 fill_values = {
@@ -47,23 +53,17 @@ fill_values = {
 }
 df.fillna(value=fill_values, inplace=True)
 
-# Load city coordinates
-if os.path.exists(coords_csv):
-    coords_df = pd.read_csv(coords_csv)
-else:
-    st.error("⚠️ city_coordinates.csv not found.")
-    st.stop()
+# Merge coordinates carefully
+if "Latitude" not in df.columns or "Longitude" not in df.columns:
+    df = df.merge(coords_df, on="City Name", how="left")
 
 # -------------------------------
-# 🗂️ USER INPUT
+# User Input
 # -------------------------------
-st.subheader("🔍 Enter Region Name (City / Town / Village / District / State)")
+st.subheader("🔍 Enter Region Name (City / Town / District / State)")
 region_name = st.text_input("Type region name here:", "")
 
 if region_name:
-    # -------------------------------
-    # 🔎 FIND USER LOCATION
-    # -------------------------------
     geolocator = Nominatim(user_agent="regional_accident_app")
     try:
         user_loc = geolocator.geocode(f"{region_name}, India")
@@ -72,81 +72,75 @@ if region_name:
             st.stop()
         user_lat, user_lon = user_loc.latitude, user_loc.longitude
     except:
-        st.error("Error fetching location coordinates.")
+        st.error("❌ Error fetching location coordinates.")
         st.stop()
 
     # -------------------------------
-    # 🧠 MERGE COORDINATES AND FILTER NEARBY
+    # Haversine formula
     # -------------------------------
-    df_coords = df.merge(coords_df, on="City Name", how="left")
-
     def haversine(lat1, lon1, lat2, lon2):
         R = 6371
-        phi1 = np.radians(lat1)
-        phi2 = np.radians(lat2)
-        dphi = np.radians(lat2 - lat1)
-        dlambda = np.radians(lon2 - lon1)
-        a = np.sin(dphi/2.0)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlambda/2.0)**2
+        phi1, phi2 = np.radians(lat1), np.radians(lat2)
+        dphi, dlambda = np.radians(lat2 - lat1), np.radians(lon2 - lon1)
+        a = np.sin(dphi / 2.0)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlambda / 2.0)**2
         return R * 2 * np.arcsin(np.sqrt(a))
 
-    df_coords["Distance_km"] = df_coords.apply(lambda row: haversine(user_lat, user_lon, row["Latitude"], row["Longitude"]), axis=1)
-    nearby_df = df_coords[df_coords["Distance_km"] <= 50].copy()
+    df = df.dropna(subset=["Latitude", "Longitude"])
+    df["Distance_km"] = df.apply(
+        lambda row: haversine(user_lat, user_lon, row["Latitude"], row["Longitude"]), axis=1
+    )
+
+    nearby_df = df[df["Distance_km"] <= 50].copy()
 
     if nearby_df.empty:
-        st.info("No accident-prone areas found nearby. Showing your location only.")
+        st.info("No accident spots found within 50 km.")
         nearby_df = pd.DataFrame([{
             "City Name": region_name,
             "State Name": "Unknown",
-            "Accident Location Details": "N/A",
             "Accident Severity": "N/A",
-            "Road Type": "N/A",
-            "Road Condition": "N/A",
-            "Lighting Conditions": "N/A",
-            "Traffic Control Presence": "N/A",
             "Latitude": user_lat,
             "Longitude": user_lon,
             "Distance_km": 0
         }])
 
     # -------------------------------
-    # 📊 SHOW TABLE
+    # Table
     # -------------------------------
-    st.subheader("📊 Nearby Accident Data")
-    display_cols = ["City Name","State Name","Accident Location Details","Accident Severity",
-                    "Road Type","Road Condition","Lighting Conditions","Traffic Control Presence","Distance_km"]
-    st.dataframe(nearby_df[display_cols].sort_values("Distance_km"))
+    st.subheader("📊 Accident Data within 50 km Radius")
+    show_cols = [
+        "City Name", "State Name", "Accident Severity",
+        "Road Type", "Road Condition", "Lighting Conditions", "Traffic Control Presence"
+    ]
+    available_cols = [col for col in show_cols if col in nearby_df.columns]
+    st.dataframe(nearby_df[available_cols + ["Distance_km"]].sort_values("Distance_km"))
 
     # -------------------------------
-    # 🗺️ GENERATE ENHANCED MAP
+    # Map
     # -------------------------------
-    st.subheader("🗺️ Nearby Accident Hotspots Map")
-    m = folium.Map(location=[user_lat, user_lon], zoom_start=12)
+    st.subheader("🗺️ Accident Hotspots (Red Circles = Accident Spots, Blue Star = You)")
+    m = folium.Map(location=[user_lat, user_lon], zoom_start=10, tiles="OpenStreetMap")
 
+    # Add HeatMap (for density)
+    heat_data = [[row["Latitude"], row["Longitude"]] for _, row in nearby_df.iterrows()]
+    if heat_data:
+        HeatMap(heat_data, radius=18, blur=15, gradient={0.3:'orange',0.5:'red',0.8:'darkred'}).add_to(m)
+
+    # Add red circle markers with labels
     for _, row in nearby_df.iterrows():
-        if row["Accident Severity"] not in ["N/A", "Unknown"]:
-            color = "red"
-            radius = 6 + np.log1p(1)  # can be replaced with #accidents if available
-        else:
-            color = "green"
-            radius = 6
-
-        folium.CircleMarker(
+        folium.Circle(
             location=[row["Latitude"], row["Longitude"]],
-            radius=radius,
-            color=color,
+            radius=300,
+            color="red",
             fill=True,
-            fill_opacity=0.6,
+            fill_color="red",
+            fill_opacity=0.4,
             popup=(f"<b>City:</b> {row['City Name']}<br>"
                    f"<b>State:</b> {row['State Name']}<br>"
-                   f"<b>Accident Severity:</b> {row['Accident Severity']}<br>"
-                   f"<b>Road Type:</b> {row['Road Type']}<br>"
-                   f"<b>Road Condition:</b> {row['Road Condition']}<br>"
-                   f"<b>Lighting:</b> {row['Lighting Conditions']}<br>"
-                   f"<b>Traffic Control:</b> {row['Traffic Control Presence']}<br>"
+                   f"<b>Severity:</b> {row['Accident Severity']}<br>"
                    f"<b>Distance:</b> {row['Distance_km']:.2f} km")
         ).add_to(m)
 
-    # Draw 50 km radius around user
+    # Draw radius circle
     folium.Circle(
         location=[user_lat, user_lon],
         radius=50000,
@@ -155,7 +149,7 @@ if region_name:
         popup="50 km Radius"
     ).add_to(m)
 
-    # Highlight user location
+    # User location marker
     folium.Marker(
         location=[user_lat, user_lon],
         popup=f"<b>Your Location:</b> {region_name}",
@@ -163,23 +157,4 @@ if region_name:
     ).add_to(m)
 
     st_folium(m, width=1200, height=600)
-    st.success("✅ Map generated successfully!")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    st.success("✅ Accident-prone areas are now highlighted with red circles and labeled.")
