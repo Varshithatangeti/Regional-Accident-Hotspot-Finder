@@ -7,16 +7,10 @@ from geopy.geocoders import Nominatim
 from folium.plugins import HeatMap
 import os
 
-# -------------------------------
-# Page Setup
-# -------------------------------
 st.set_page_config(page_title="Regional Accident Hotspot Finder", layout="wide")
 st.title("🚦 Regional Accident Hotspot Finder in India 🇮🇳")
 st.markdown("Enter a region name and view all accident hotspots within a 50 km radius.")
 
-# -------------------------------
-# Load Data
-# -------------------------------
 accident_csv = "accident_prediction_india.csv"
 coords_csv = "city_coordinates.csv"
 
@@ -36,7 +30,6 @@ else:
     st.error("⚠️ city_coordinates.csv not found.")
     st.stop()
 
-# Fill missing values
 fill_values = {
     "Driver License Status": "Unknown",
     "Alcohol Involvement": "Unknown",
@@ -53,13 +46,9 @@ fill_values = {
 }
 df.fillna(value=fill_values, inplace=True)
 
-# Merge coordinates carefully
 if "Latitude" not in df.columns or "Longitude" not in df.columns:
     df = df.merge(coords_df, on="City Name", how="left")
 
-# -------------------------------
-# User Input
-# -------------------------------
 st.subheader("🔍 Enter Region Name (City / Town / District / State)")
 region_name = st.text_input("Type region name here:", "")
 
@@ -75,9 +64,6 @@ if region_name:
         st.error("❌ Error fetching location coordinates.")
         st.stop()
 
-    # -------------------------------
-    # Haversine formula
-    # -------------------------------
     def haversine(lat1, lon1, lat2, lon2):
         R = 6371
         phi1, phi2 = np.radians(lat1), np.radians(lat2)
@@ -103,9 +89,6 @@ if region_name:
             "Distance_km": 0
         }])
 
-    # -------------------------------
-    # Table
-    # -------------------------------
     st.subheader("📊 Accident Data within 50 km Radius")
     show_cols = [
         "City Name", "State Name", "Accident Severity",
@@ -114,18 +97,13 @@ if region_name:
     available_cols = [col for col in show_cols if col in nearby_df.columns]
     st.dataframe(nearby_df[available_cols + ["Distance_km"]].sort_values("Distance_km"))
 
-    # -------------------------------
-    # Map
-    # -------------------------------
     st.subheader("🗺️ Accident Hotspots (Red Circles = Accident Spots, Blue Star = You)")
     m = folium.Map(location=[user_lat, user_lon], zoom_start=10, tiles="OpenStreetMap")
 
-    # Add HeatMap (for density)
     heat_data = [[row["Latitude"], row["Longitude"]] for _, row in nearby_df.iterrows()]
     if heat_data:
         HeatMap(heat_data, radius=18, blur=15, gradient={0.3:'orange',0.5:'red',0.8:'darkred'}).add_to(m)
 
-    # Add red circle markers with labels
     for _, row in nearby_df.iterrows():
         folium.Circle(
             location=[row["Latitude"], row["Longitude"]],
@@ -140,7 +118,6 @@ if region_name:
                    f"<b>Distance:</b> {row['Distance_km']:.2f} km")
         ).add_to(m)
 
-    # Draw radius circle
     folium.Circle(
         location=[user_lat, user_lon],
         radius=50000,
@@ -149,7 +126,6 @@ if region_name:
         popup="50 km Radius"
     ).add_to(m)
 
-    # User location marker
     folium.Marker(
         location=[user_lat, user_lon],
         popup=f"<b>Your Location:</b> {region_name}",
